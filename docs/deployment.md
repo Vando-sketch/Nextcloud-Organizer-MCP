@@ -21,6 +21,7 @@ Where does your Claude client run?
 | Option | Prerequisites | Exposure and authentication | Status |
 |---|---|---|---|
 | [Existing reverse proxy or shared Nextcloud host](#reuse-another-existing-nextcloud-proxy) | A proxy you already run with TLS on the same host, a new subdomain such as `organizer.example.com` | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Not tested (nginx, Traefik) |
+| [Path on the Nextcloud hostname](#serve-under-a-path-on-the-nextcloud-hostname) | A proxy for the Nextcloud hostname that can strip a path prefix and forward three root-level discovery paths | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Partially tested (local Caddy with a real Nextcloud container and the MCP SDK client; no public run, no Claude.ai) |
 | [New public server with Caddy](#caddy-on-the-same-host) | A host with a public IP, inbound ports 80 and 443, a DNS name | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Partially tested (local Caddy only, no public run) |
 | [Cloudflare Tunnel](#4c-alternative-cloudflare-tunnel) | A domain on Cloudflare. No inbound ports, works behind CGNAT | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Partially tested (quick tunnel and scripted client; standalone `GET /mcp` stream failed on the quick tunnel) |
 | [Tailscale Funnel](#4b-expose-via-tailscale-funnel) | A Tailscale account with Funnel enabled for the node | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Supported, tested with claude.ai |
@@ -45,7 +46,9 @@ These names are used consistently. Replace them with your own.
 ### `PUBLIC_BASE_URL` versus the connector URL
 
 `PUBLIC_BASE_URL` is the bare origin clients use: scheme and host, **without** `/mcp`,
-for example `https://organizer.example.com`. The server builds its OAuth discovery
+for example `https://organizer.example.com`. A
+[subpath deployment](#serve-under-a-path-on-the-nextcloud-hostname) adds its prefix,
+for example `https://cloud.example.com/organizer`. The server builds its OAuth discovery
 URLs from it, so a mismatch breaks the OAuth flow. The **connector URL** you enter in
 Claude is `PUBLIC_BASE_URL` plus the MCP path: `https://organizer.example.com/mcp`.
 Local HTTP uses `PUBLIC_BASE_URL=http://127.0.0.1:8000` and the endpoint
@@ -101,7 +104,8 @@ NEXTCLOUD_APP_PASSWORD=<app password from Settings -> Security>
 # NEXTCLOUD_CALDAV_URL=https://cloud.example.com/remote.php/dav/
 
 # Must match the public HTTPS origin exactly (scheme + host, no /mcp), set up in step 4a,
-# 4b or 4c. For Funnel use https://<hostname>.<tailnet>.ts.net instead.
+# 4b or 4c. For Funnel use https://<hostname>.<tailnet>.ts.net instead. A subpath
+# deployment adds its prefix: https://cloud.example.com/organizer.
 PUBLIC_BASE_URL=https://organizer.example.com
 
 # Required for any non-localhost PUBLIC_BASE_URL, or if MCP_HOST below is
@@ -277,9 +281,9 @@ The server serves `/mcp`, `/.well-known/oauth-authorization-server`, OAuth
 protected-resource discovery at `/.well-known/oauth-protected-resource/mcp`
 (use the URL in `/mcp`'s `WWW-Authenticate` challenge), `/register`,
 `/authorize`, `/consent` (GET and POST), and `/token`.
-Proxying only `/mcp` leaves discovery and consent unreachable. Use a subdomain;
-subpath deployment is tracked separately in
-[#73](https://github.com/Vando-sketch/Nextcloud-Organizer-MCP/issues/73).
+Proxying only `/mcp` leaves discovery and consent unreachable. Prefer a subdomain;
+a path on the Nextcloud hostname works with the extra routing described in
+[Serve under a path on the Nextcloud hostname](#serve-under-a-path-on-the-nextcloud-hostname).
 
 Caddy preserves `Host`, sets `X-Forwarded-For`, `X-Forwarded-Proto`, and
 `X-Forwarded-Host`, and ignores client-supplied values for those forwarded
@@ -315,6 +319,69 @@ be cut off by a short proxy deadline. Test through every proxy hop using the
 [shared checklist](deployment-verification.md). nginx/Traefik configurations
 remain unverified here; verify them with the shared checklist before publishing
 copyable recipes.
+
+### Serve under a path on the Nextcloud hostname
+
+If you cannot add a subdomain, the server can run under a path such as
+`https://cloud.example.com/organizer` next to Nextcloud. Set
+`PUBLIC_BASE_URL=https://cloud.example.com/organizer`; the connector URL is
+`https://cloud.example.com/organizer/mcp`.
+
+The proxy needs three rules for the Nextcloud hostname, ahead of Nextcloud's own:
+
+1. **Strip the prefix.** Forward `/organizer/*` to `127.0.0.1:8000` with `/organizer`
+   removed. The server's routes are `/mcp`, `/authorize`, `/consent` and so on;
+   forwarding `/organizer/mcp` unchanged gives `404`.
+2. **Forward the issuer's discovery paths unchanged.** OAuth discovery for an issuer
+   with a path lives at the domain root, with the path after `/.well-known/`
+   ([RFC 8414](https://www.rfc-editor.org/rfc/rfc8414#section-3.1),
+   [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728#section-3.1)):
+   `/.well-known/oauth-authorization-server/organizer`,
+   `/.well-known/openid-configuration/organizer` and
+   `/.well-known/oauth-protected-resource/organizer/mcp`. The server answers these
+   exact paths when `PUBLIC_BASE_URL` has a path.
+3. **Send everything else to Nextcloud,** including its own `/.well-known/` paths.
+
+With Caddy (also in [examples/Caddyfile.subpath](../examples/Caddyfile.subpath),
+together with the log filter from the subdomain recipe):
+
+```caddyfile
+cloud.example.com {
+    handle_path /organizer/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    @organizer_discovery path /.well-known/oauth-authorization-server/organizer /.well-known/openid-configuration/organizer /.well-known/oauth-protected-resource/organizer/*
+    handle @organizer_discovery {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    handle {
+        # your existing Nextcloud directives
+    }
+}
+```
+
+For nginx, Nextcloud's recommended configuration has a `location ^~ /.well-known`
+block. Put exact `location =` blocks for the discovery paths before it, and a
+`location /organizer/` block whose `proxy_pass http://127.0.0.1:8000/;` ends in a
+slash so nginx strips the prefix. This nginx variant is not tested.
+
+Limits compared to a subdomain:
+
+- **Old clients cannot discover it.** Clients that follow the MCP authorization
+  spec from 2025-06-18 on read the `401` challenge and find the paths above. Clients
+  that only know the 2025-03-26 rules look for `/.well-known/oauth-authorization-server`
+  and `/register` at the domain root, which belong to Nextcloud, and fail.
+- **One browser origin.** The consent page shares an origin with Nextcloud, and the
+  browser sends Nextcloud's cookies along to `/organizer/` paths. The server ignores
+  them, but a subdomain keeps the two apps isolated.
+- **Verification status.** Tested with a local Caddy 2.11.4 over plain HTTP in front of
+  a real Nextcloud 35.0.1 container: the MCP Python SDK 2.2.0 OAuth client found the
+  server from the challenge, passed the consent page under the prefix, and called
+  `list_task_lists` against Nextcloud. Public TLS and the claude.ai connector have not
+  been tested on a subpath; please report results on
+  [#73](https://github.com/Vando-sketch/Nextcloud-Organizer-MCP/issues/73).
 
 ### Protect OAuth request parameters in proxy logs
 
@@ -857,7 +924,9 @@ URL, TLS and routing for discovery are right.
 
 | Symptom | Likely cause |
 |---|---|
-| Discovery or consent returns `404`, or Nextcloud HTML | The proxy routes only `/mcp`, strips a path prefix, or selects the Nextcloud virtual host. Route all paths for the dedicated MCP hostname. |
+| Discovery or consent returns `404`, or Nextcloud HTML | The proxy routes only `/mcp`, strips a path prefix that `PUBLIC_BASE_URL` does not contain, or selects the Nextcloud virtual host. Route all paths for the dedicated MCP hostname. |
+| Subpath deployment: the client reports no authorization server, or registration fails with Nextcloud HTML | The root-level discovery paths for the prefix are not forwarded to MCP, or a Nextcloud `/.well-known` rule catches them first. See [the subpath rules](#serve-under-a-path-on-the-nextcloud-hostname). |
+| Subpath deployment: `404` on `/organizer/mcp` from MCP itself | The proxy forwards the prefix instead of stripping it. |
 | All users share a consent `429`, or changing `X-Forwarded-For` bypasses it | Review forwarded-header trust: MCP must trust the actual proxy peer and the proxy must replace untrusted incoming headers. Repeat the two-client and spoofing checks. |
 | Cloudflare Tunnel: consent page answers `429` for everyone | `cloudflared` runs on another host, so all clients share one address; set `FORWARDED_ALLOW_IPS` (see above) |
 

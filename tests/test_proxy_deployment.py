@@ -15,6 +15,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import shutil
 import socket
 import ssl
@@ -25,10 +26,11 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 import pytest
@@ -39,6 +41,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from fastmcp import Context, FastMCP
+from mcp.client.auth.utils import build_oauth_authorization_server_metadata_discovery_urls
 from test_oauth_e2e import (
     REDIRECT_URI,
     _authorize,
@@ -171,17 +174,82 @@ def _certificate(tmp_path: Path) -> tuple[Path, Path]:
     return certificate_path, key_path
 
 
-@pytest.fixture
-def proxy_deployment(settings: Settings, tmp_path: Path, monkeypatch) -> Iterator[ProxyDeployment]:
-    configured = os.environ.get("CADDY_BIN", "caddy")
-    binary = shutil.which(configured)
+def _caddy_binary() -> str:
+    binary = shutil.which(os.environ.get("CADDY_BIN", "caddy"))
     assert binary is not None, "RUN_PROXY_TESTS=1 requires CADDY_BIN or caddy on PATH"
-    monkeypatch.setenv("FORWARDED_ALLOW_IPS", "127.0.0.1")
-    # Allocate a free port without a fixed port dependency. Caddy cannot adopt
-    # this socket, so release it before starting the proxy.
+    return binary
+
+
+def _free_port() -> int:
+    # Caddy cannot adopt a pre-bound socket, so release it before starting the proxy.
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
+        return int(listener.getsockname()[1])
+
+
+def _site_config(example: str, site: str, certificate: Path, key: Path) -> str:
+    """Make a documented example Caddyfile serve `site` with the test certificate."""
+    config = (Path(__file__).resolve().parents[1] / "examples" / example).read_text()
+    block = f"{site} {{"
+    assert block in config, f"examples/{example} must contain the documented site block"
+    config = config.replace(block, f'{block}\n    bind 127.0.0.1\n    tls "{certificate}" "{key}"')
+    return config.replace("{\n", "{\n    admin off\n    auto_https off\n", 1)
+
+
+@contextmanager
+def _caddy(
+    binary: str,
+    config: str,
+    base_url: str,
+    context: ssl.SSLContext,
+    tmp_path: Path,
+    ready_path: str = "/.well-known/oauth-authorization-server",
+) -> Iterator[Path]:
+    """Run Caddy with `config` until `ready_path` answers 200; yield its log path."""
+    config_path = tmp_path / "Caddyfile"
+    config_path.write_text(config)
+    log_path = tmp_path / "caddy.log"
+    with log_path.open("w+") as log:
+        process = subprocess.Popen(
+            [binary, "run", "--config", str(config_path), "--adapter", "caddyfile"],
+            stdout=log,
+            stderr=log,
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "XDG_DATA_HOME": str(tmp_path / "data"),
+                "XDG_CONFIG_HOME": str(tmp_path / "config"),
+            },
+        )
+        try:
+            deadline = time.monotonic() + 10
+            with httpx.Client(base_url=base_url, verify=context, trust_env=False) as http:
+                while True:
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        log.flush()
+                        pytest.fail(f"Caddy did not start:\n{log_path.read_text()}")
+                    try:
+                        if http.get(ready_path, timeout=0.5).status_code == 200:
+                            break
+                    except httpx.TransportError:
+                        pass
+                    time.sleep(0.02)
+            yield log_path
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+
+
+@pytest.fixture
+def proxy_deployment(settings: Settings, tmp_path: Path, monkeypatch) -> Iterator[ProxyDeployment]:
+    binary = _caddy_binary()
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", "127.0.0.1")
+    port = _free_port()
     base_url = f"https://localhost:{port}"
     certificate, key = _certificate(tmp_path)
     context = ssl.create_default_context(cafile=str(certificate))
@@ -216,46 +284,11 @@ def proxy_deployment(settings: Settings, tmp_path: Path, monkeypatch) -> Iterato
 
     with _backend(settings, service, base_url, configure=add_hold_open_tool) as backend:
         current.append(backend)
-        example = Path(__file__).resolve().parents[1] / "examples" / "Caddyfile"
-        config = example.read_text().replace("organizer.example.com", f"localhost:{port}")
+        config = _site_config("Caddyfile", "organizer.example.com", certificate, key)
+        config = config.replace("organizer.example.com", f"localhost:{port}")
         config = config.replace("127.0.0.1:8000", urlparse(backend.base_url).netloc)
-        site = f"localhost:{port} {{"
-        assert site in config, "example Caddyfile must contain the documented site block"
-        config = config.replace(
-            site, f'{site}\n    bind 127.0.0.1\n    tls "{certificate}" "{key}"'
-        )
-        config = config.replace("{\n", "{\n    admin off\n    auto_https off\n", 1)
-        config_path = tmp_path / "Caddyfile"
-        config_path.write_text(config)
-        log_path = tmp_path / "caddy.log"
-        with log_path.open("w+") as log:
-            process = subprocess.Popen(
-                [binary, "run", "--config", str(config_path), "--adapter", "caddyfile"],
-                stdout=log,
-                stderr=log,
-                cwd=tmp_path,
-                env={
-                    **os.environ,
-                    "XDG_DATA_HOME": str(tmp_path / "data"),
-                    "XDG_CONFIG_HOME": str(tmp_path / "config"),
-                },
-            )
+        with _caddy(binary, config, base_url, context, tmp_path) as log_path:
             try:
-                deadline = time.monotonic() + 10
-                with httpx.Client(base_url=base_url, verify=context, trust_env=False) as http:
-                    while True:
-                        if process.poll() is not None or time.monotonic() >= deadline:
-                            log.flush()
-                            pytest.fail(f"Caddy did not start:\n{log_path.read_text()}")
-                        try:
-                            response = http.get(
-                                "/.well-known/oauth-authorization-server", timeout=0.5
-                            )
-                            if response.status_code == 200:
-                                break
-                        except httpx.TransportError:
-                            pass
-                        time.sleep(0.02)
                 yield ProxyDeployment(
                     base_url,
                     context,
@@ -269,13 +302,6 @@ def proxy_deployment(settings: Settings, tmp_path: Path, monkeypatch) -> Iterato
             finally:
                 for restarted in current[1:]:
                     restarted.stop()
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait(timeout=10)
 
 
 def _exhaust_password_budget(http: httpx.Client, client_id: str) -> None:
@@ -656,3 +682,140 @@ def test_caddy_reaches_a_restarted_backend_and_keeps_issued_tokens(proxy_deploym
         )
         assert not result.get("isError", False)
         deployment.service.list_task_lists.assert_called_once_with()
+
+
+@contextmanager
+def _placeholder_site() -> Iterator[str]:
+    """Stand in for the Nextcloud upstream that owns the rest of the domain."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def _answer(self) -> None:
+            body = b"placeholder nextcloud"
+            self.send_response(404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST = _answer
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@requires_caddy
+def test_caddy_subpath_example_completes_oauth_and_a_read_only_call(
+    settings: Settings, tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", "127.0.0.1")
+    binary = _caddy_binary()
+    port = _free_port()
+    origin = f"https://localhost:{port}"
+    base = f"{origin}/organizer"
+    certificate, key = _certificate(tmp_path)
+    context = ssl.create_default_context(cafile=str(certificate))
+    service = MagicMock(spec=CalDavService)
+    service.list_task_lists.return_value = TASK_LISTS
+    with _placeholder_site() as nextcloud, _backend(settings, service, base) as backend:
+        config = _site_config("Caddyfile.subpath", "cloud.example.com", certificate, key)
+        config = config.replace("cloud.example.com", f"localhost:{port}")
+        config = config.replace("127.0.0.1:8000", urlparse(backend.base_url).netloc)
+        config = config.replace("127.0.0.1:8080", nextcloud)
+        ready = "/.well-known/oauth-authorization-server/organizer"
+        with (
+            _caddy(binary, config, origin, context, tmp_path, ready),
+            httpx.Client(verify=context, trust_env=False, timeout=10) as http,
+        ):
+            # Discovery as the MCP SDK client derives it from the challenge.
+            challenge = http.post(f"{base}/mcp", json={})
+            assert challenge.status_code == 401
+            match = re.search(r'resource_metadata="([^"]+)"', challenge.headers["www-authenticate"])
+            assert match is not None
+            resource_url = match.group(1)
+            assert resource_url == f"{origin}/.well-known/oauth-protected-resource/organizer/mcp"
+            resource = http.get(resource_url).json()
+            assert resource["resource"] == f"{base}/mcp"
+            assert resource["authorization_servers"] == [base]
+            metadata_url = build_oauth_authorization_server_metadata_discovery_urls(
+                base, f"{base}/mcp"
+            )[0]
+            meta = http.get(metadata_url).json()
+            assert meta["issuer"] == base
+
+            registered = http.post(
+                meta["registration_endpoint"],
+                json={
+                    "client_name": "subpath-proxy",
+                    "redirect_uris": [REDIRECT_URI],
+                    "token_endpoint_auth_method": "none",
+                    "grant_types": ["authorization_code", "refresh_token"],
+                    "response_types": ["code"],
+                },
+            )
+            assert registered.status_code == 201, registered.text
+            client_id = registered.json()["client_id"]
+            verifier, code_challenge = _pkce()
+            authorized = http.get(
+                meta["authorization_endpoint"],
+                params={
+                    "client_id": client_id,
+                    "redirect_uri": REDIRECT_URI,
+                    "response_type": "code",
+                    "code_challenge": code_challenge,
+                    "code_challenge_method": "S256",
+                    "state": "csrf-state",
+                },
+            )
+            assert authorized.status_code == 302
+            consent_url = authorized.headers["location"]
+            assert consent_url.startswith(f"{base}/consent?pending=")
+            page = http.get(consent_url)
+            assert page.status_code == 200
+            action = re.search(r'<form method="POST" action="([^"]+)"', page.text)
+            assert action is not None
+            submit_url = urljoin(consent_url, action.group(1))
+            assert submit_url == f"{base}/consent"
+            pending = parse_qs(urlparse(consent_url).query)["pending"][0]
+            consent = http.post(
+                submit_url, data={"pending": pending, "password": TEST_OAUTH_PASSWORD}
+            )
+            assert consent.status_code == 302, consent.text
+            code = parse_qs(urlparse(consent.headers["location"]).query)["code"][0]
+            token = http.post(
+                meta["token_endpoint"],
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": REDIRECT_URI,
+                    "client_id": client_id,
+                    "code_verifier": verifier,
+                },
+            )
+            assert token.status_code == 200, token.text
+
+            # The rest of the domain still belongs to the other site.
+            assert http.get(f"{origin}/status.php").text == "placeholder nextcloud"
+            assert http.post(f"{origin}/consent").text == "placeholder nextcloud"
+
+            with httpx.Client(base_url=base, verify=context, trust_env=False, timeout=10) as mcp:
+                _open_mcp_session(mcp, token.json()["access_token"])
+                result = _rpc(
+                    mcp,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/call",
+                        "params": {"name": "list_task_lists", "arguments": {}},
+                    },
+                )
+            assert not result.get("isError", False)
+            text = "".join(item["text"] for item in result["content"] if item["type"] == "text")
+            assert json.loads(text) == TASK_LISTS

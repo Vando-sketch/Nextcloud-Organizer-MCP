@@ -201,6 +201,7 @@ automated result as evidence for the manual columns.
 | Recipe | Automated | Manual: external client | Manual: real Nextcloud read-only call | Manual: restart / reconnect | Manual: distinct client IPs | Manual: streaming |
 |---|---|---|---|---|---|---|
 | Caddy | Passed (local Caddy 2.11.4, CI job `caddy-proxy`) | Pending | Pending | Pending | Pending | Pending |
+| Caddy, path prefix ([subpath recipe](deployment.md#serve-under-a-path-on-the-nextcloud-hostname)) | Passed (local Caddy 2.11.4 with `examples/Caddyfile.subpath`; in-process prefix proxy with the MCP SDK OAuth client) | Pending: no claude.ai run | Passed 2026-10-13 (local Caddy over HTTP, Nextcloud 35.0.1 container, MCP Python SDK 2.2.0 client, `list_task_lists`) | Pending | Pending | Pending |
 | nginx / Traefik / other proxy | None | Pending | Pending | Pending | Pending | Pending |
 | Cloudflare Tunnel | None | Pending: no named tunnel or real Claude client | Passed 2026-09-30 through a quick tunnel with a scripted client | Passed 2026-09-30 (two server restarts, quick tunnel) | Forged headers did not bypass the limit (quick tunnel, one source address) | Failed on quick tunnel (standalone `GET /mcp` not delivered); named tunnel pending |
 | Tailscale Funnel | Shared OAuth tests only | Claude.ai connector and consent flow tested per the README; not recorded with this template | Pending | Pending | Pending | Pending |

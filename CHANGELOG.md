@@ -34,8 +34,20 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `vX.Y.Z`, `X.Y`, `latest`), plus a `compose.yaml`. Runs as a non-root user and
   keeps the OAuth state in a `/data` volume. See [Running in Docker](docs/docker.md).
 
+- Deployment under a path prefix next to Nextcloud, for example
+  `PUBLIC_BASE_URL=https://cloud.example.com/organizer`, with a Caddy example
+  (`examples/Caddyfile.subpath`) (#73). The server now also answers the RFC 8414
+  path-aware discovery URLs for such an issuer, which the proxy forwards from
+  the domain root. Tested locally with Caddy and a real Nextcloud container;
+  a public run with claude.ai is still pending. A subdomain stays the
+  recommended setup.
+
 ### Fixed
 
+- The consent form no longer posts outside a `PUBLIC_BASE_URL` path prefix. It
+  submitted to `/consent` at the domain root, so behind a prefixed proxy the
+  password reached Nextcloud instead of this server and authorization could not
+  complete.
 - `create_birthday` again keeps filing birthdays in an existing legacy
   `Geburtstage` calendar (tagged `Geburtstag`) when no `Birthdays` calendar
   exists. The German-to-English rename had overwritten both legacy names with
