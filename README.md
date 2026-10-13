@@ -160,7 +160,7 @@ Claude ── HTTPS + OAuth 2.1 ──► your server (this project) ── CalD
 
 ## Documentation
 
-- [Deployment guide](docs/deployment.md) &mdash; deployment chooser, systemd, Caddy/existing Nextcloud proxy, Tailscale Funnel or Cloudflare Tunnel, local-only use, and Claude connector setup
+- [Deployment guide](docs/deployment.md) &mdash; deployment chooser, systemd, Caddy/existing Nextcloud proxy, Tailscale Funnel or Cloudflare Tunnel, local-only use, Claude connector setup, and the `nextcloud-organizer-mcp-doctor` deployment check
 - [Running in Docker](docs/docker.md) &mdash; container image, compose file, persistence, TLS
 - [Authentication](docs/authentication.md) &mdash; OAuth model, consent page, local security patches
 - [Tool reference](docs/tools.md) &mdash; all tools with parameters, examples and error messages

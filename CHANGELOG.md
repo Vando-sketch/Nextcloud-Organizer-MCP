@@ -34,6 +34,15 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `vX.Y.Z`, `X.Y`, `latest`), plus a `compose.yaml`. Runs as a non-root user and
   keeps the OAuth state in a `/data` volume. See [Running in Docker](docs/docker.md).
 
+- `nextcloud-organizer-mcp-doctor <url>` checks a deployment the way a remote
+  MCP client sees it: DNS, TLS, the `/mcp` OAuth challenge, protected-resource
+  and authorization-server discovery, advertised URLs that do not match the
+  checked URL (such as a leftover localhost `PUBLIC_BASE_URL`), and routing of
+  the OAuth endpoints. It names what answered instead (Nextcloud, a Cloudflare
+  challenge, another login layer, an unreachable backend) with a fix, and exits
+  non-zero on failure. Read-only and unauthenticated; a pass does not prove that
+  OAuth consent or Nextcloud access work (#74). See
+  [Run the deployment check](docs/deployment.md#run-the-deployment-check).
 - Deployment under a path prefix next to Nextcloud, for example
   `PUBLIC_BASE_URL=https://cloud.example.com/organizer`, with a Caddy example
   (`examples/Caddyfile.subpath`) (#73). The server now also answers the RFC 8414

@@ -889,9 +889,46 @@ old one).
 
 Find the class of failure first, then the row. Every class can be checked with
 the matching step of the [shared verification checklist](deployment-verification.md#shared-checklist).
-The quickest test is `curl -i https://<host>/.well-known/oauth-authorization-server`
-from outside the server's network: valid JSON with your public `https://` URLs means
-URL, TLS and routing for discovery are right.
+
+### Run the deployment check
+
+`nextcloud-organizer-mcp-doctor` (installed with the server) checks a public URL the
+way a remote MCP client sees it: DNS, TLS, the `401` challenge on `/mcp`, OAuth
+discovery, whether the advertised URLs match the URL you checked, and whether
+`/register`, `/authorize`, `/token` and `/consent` reach the server. Give it
+`PUBLIC_BASE_URL` or the connector URL, and run it from **outside** the server's
+network when you can, since that is where cloud clients connect from:
+
+```bash
+nextcloud-organizer-mcp-doctor https://organizer.example.com
+# Docker, without installing anything:
+docker run --rm --entrypoint nextcloud-organizer-mcp-doctor \
+    ghcr.io/vando-sketch/nextcloud-organizer-mcp https://organizer.example.com
+```
+
+```text
+[PASS] URL: connector URL https://organizer.example.com/mcp, PUBLIC_BASE_URL https://organizer.example.com
+...
+[PASS] TLS: certificate for organizer.example.com accepted
+[FAIL] MCP endpoint: the challenge advertises http://127.0.0.1:8000/.well-known/oauth-protected-resource/mcp: origin http://127.0.0.1:8000 instead of https://organizer.example.com, a localhost address
+       -> The server builds these URLs from PUBLIC_BASE_URL alone: set it to exactly https://organizer.example.com (no /mcp) and restart the server.
+```
+
+Each failure names what answered instead (Nextcloud, a Cloudflare challenge, another
+login layer, a proxy that cannot reach the backend) and what to change. It exits `0`
+when nothing failed (warnings allowed), `1` when a check failed and `2` on usage
+errors.
+
+The checks are read-only and unauthenticated: they never register a client, start an
+authorization or submit the consent form, so they create no OAuth state and do not
+count against the consent rate limits. A pass does **not** prove that OAuth consent or
+Nextcloud access work. Finish the check by adding the connector in your client,
+entering `MCP_OAUTH_PASSWORD` on the consent page and running a read-only tool such as
+`list_task_lists`.
+
+Without the tool, `curl -i https://<host>/.well-known/oauth-authorization-server` from
+outside the server's network is the quickest manual test: valid JSON with your public
+`https://` URLs means URL, TLS and routing for discovery are right.
 
 ### Public URL mismatch
 

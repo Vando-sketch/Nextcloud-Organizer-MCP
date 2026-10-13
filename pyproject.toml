@@ -61,6 +61,7 @@ dev = [
 [project.scripts]
 nextcloud-organizer-mcp = "nextcloud_organizer_mcp.server:main"
 nextcloud-organizer-mcp-admin = "nextcloud_organizer_mcp.admin:main"
+nextcloud-organizer-mcp-doctor = "nextcloud_organizer_mcp.doctor:main"
 # Deprecated aliases from before the rename (nextcloud-task-mcp), kept so
 # existing deployments whose systemd unit still runs the old command keep
 # working until they are migrated - see docs/deployment.md.

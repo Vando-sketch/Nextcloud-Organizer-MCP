@@ -117,6 +117,14 @@ docker compose exec nextcloud-organizer-mcp nextcloud-organizer-mcp-admin --stat
 With `docker run`, use `docker exec nextcloud-organizer-mcp …` instead. See
 [Managing issued OAuth tokens](deployment.md#managing-issued-oauth-tokens).
 
+The [deployment check](deployment.md#run-the-deployment-check) is in the image too.
+Run it from a machine outside the server's network:
+
+```bash
+docker run --rm --entrypoint nextcloud-organizer-mcp-doctor \
+    ghcr.io/vando-sketch/nextcloud-organizer-mcp https://organizer.example.com
+```
+
 ## Updating
 
 ```bash
