@@ -1,5 +1,5 @@
 # Vendored from https://github.com/crumrine/fastmcp-personal-auth
-# (commit as of 2026-07-08, file personal_auth.py), with five local security
+# (commit as of 2026-07-08, file personal_auth.py), with six local
 # patches (see "LOCAL PATCHES" below) - otherwise unmodified.
 #
 # fastmcp-personal-auth is not published as an installable package - its own
@@ -8,8 +8,8 @@
 # reformatted so that future updates can be diffed against upstream.
 #
 # LOCAL PATCHES (patches 1-2 applied 2026-07-09, patches 3-5 applied
-# 2026-07-10), all confirmed by live reproduction against a running instance,
-# not just code review:
+# 2026-07-10, patch 6 applied 2026-10-13), all confirmed by live reproduction
+# against a running instance, not just code review:
 #
 # 1. PersonalAuthProvider.authorize() had an "auto-approve for allowed
 #    redirect domains" fallback in its password check that unconditionally
@@ -112,6 +112,15 @@
 #        collect the auth router - OAuth discovery (/.well-known/*),
 #        /register (DCR) and /token are untouched.
 #
+# 6. The consent form posted to a hardcoded root-relative action="/consent".
+#    Behind a reverse proxy serving this server under a path prefix
+#    (PUBLIC_BASE_URL=https://cloud.example.com/organizer), GET /consent is
+#    reached at /organizer/consent - authorize() already builds that URL from
+#    base_url - but the form then submitted to https://cloud.example.com/consent,
+#    outside the prefix, where the proxy hands it to whatever else owns the
+#    domain (typically Nextcloud). The action is now base_url's path plus
+#    /consent, which is unchanged ("/consent") for a root deployment.
+#
 # MIT License
 #
 # Copyright (c) 2026 Brian Crumrine
@@ -160,6 +169,7 @@ Usage:
     mcp.run(transport="streamable-http", host="0.0.0.0", port=8050)
 """
 
+import html
 import json
 import os
 import secrets
@@ -419,6 +429,9 @@ class PersonalAuthProvider(InMemoryOAuthProvider):
         # (URL-safe base64 alphabet only) and `error` is one of our own static
         # strings. Nothing the user submitted is ever reflected back.
         error_html = f'<p class="error">{error}</p>' if error else ""
+        # LOCAL PATCH 6: keep the form inside a PUBLIC_BASE_URL path prefix.
+        # The prefix is operator config, not request data, but escape it anyway.
+        action = html.escape(f"{urlparse(str(self.base_url)).path.rstrip('/')}/consent", quote=True)
         return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -444,7 +457,7 @@ class PersonalAuthProvider(InMemoryOAuthProvider):
 <p>A client is requesting access to this MCP server. Enter the server
 password (<code>MCP_OAUTH_PASSWORD</code>) to approve it.</p>
 {error_html}
-<form method="POST" action="/consent">
+<form method="POST" action="{action}">
 <input type="hidden" name="pending" value="{pending_key}">
 <label for="password">Password</label>
 <input type="password" id="password" name="password"

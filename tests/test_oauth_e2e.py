@@ -14,6 +14,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import secrets
 import shutil
 import socket
@@ -24,13 +25,23 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 import pytest
 import uvicorn
 from conftest import TEST_OAUTH_PASSWORD
 from fastmcp import Client
+from mcp.client.auth import OAuthClientProvider, TokenStorage
+from mcp.shared.auth import (
+    AuthorizationCodeResult,
+    OAuthClientInformationFull,
+    OAuthClientMetadata,
+    OAuthToken,
+)
+from pydantic import AnyUrl
+from starlette.responses import PlainTextResponse
+from starlette.routing import Route
 
 from nextcloud_organizer_mcp.caldav_client import CalDavService
 from nextcloud_organizer_mcp.config import Settings
@@ -372,3 +383,149 @@ def test_dcr_accepts_an_application_type(shared_base, application_type):
             },
         )
         assert response.status_code == 201, response.text
+
+
+PREFIX = "/organizer"
+
+
+def _prefix_proxy(app, prefix: str):
+    """Route like the documented subpath proxy (examples/Caddyfile.subpath).
+
+    `prefix/*` reaches the app with the prefix stripped; the issuer's
+    root-level discovery paths reach it unchanged; everything else belongs to
+    the other site on the domain (Nextcloud), stood in for by a 404.
+    """
+    discovery = (
+        f"/.well-known/oauth-authorization-server{prefix}",
+        f"/.well-known/openid-configuration{prefix}",
+    )
+
+    async def proxy(scope, receive, send):
+        if scope["type"] == "http":
+            path = scope["path"]
+            if path.startswith(f"{prefix}/"):
+                stripped = path[len(prefix) :]
+                scope = {**scope, "path": stripped, "raw_path": stripped.encode()}
+            elif not (
+                path in discovery
+                or path.startswith(f"/.well-known/oauth-protected-resource{prefix}/")
+            ):
+                await PlainTextResponse("other site", status_code=404)(scope, receive, send)
+                return
+        await app(scope, receive, send)
+
+    return proxy
+
+
+@contextmanager
+def running_prefixed_server(settings: Settings, service: MagicMock) -> Iterator[str]:
+    """Serve the app behind `_prefix_proxy`; yield the public base URL with the prefix."""
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    base_url = f"http://127.0.0.1:{sock.getsockname()[1]}{PREFIX}"
+    local = replace(
+        settings,
+        public_base_url=base_url,
+        host="127.0.0.1",
+        oauth_allowed_redirect_domains=["claude.ai"],
+    )
+    app = _prefix_proxy(build_server(local, service=service).http_app(), PREFIX)
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning", access_log=False))
+    thread = threading.Thread(target=lambda: asyncio.run(server.serve([sock])), daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started:
+        assert thread.is_alive() and time.monotonic() < deadline, "server did not start"
+        time.sleep(0.02)
+    try:
+        yield base_url
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        sock.close()
+
+
+class _MemoryTokenStorage(TokenStorage):
+    def __init__(self) -> None:
+        self.tokens: OAuthToken | None = None
+        self.client: OAuthClientInformationFull | None = None
+
+    async def get_tokens(self) -> OAuthToken | None:
+        return self.tokens
+
+    async def set_tokens(self, tokens: OAuthToken) -> None:
+        self.tokens = tokens
+
+    async def get_client_info(self) -> OAuthClientInformationFull | None:
+        return self.client
+
+    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
+        self.client = client_info
+
+
+def test_subpath_deployment_completes_the_sdk_client_flow(settings):
+    # The MCP SDK's own OAuth client does the discovery: 401 challenge,
+    # protected-resource metadata, then RFC 8414 path-aware authorization
+    # server metadata at the domain root. The browser part is played by
+    # submitting the consent form wherever its action points.
+    service = MagicMock(spec=CalDavService)
+    service.list_task_lists.return_value = [{"name": "Tasks", "url": "https://x/tasks/"}]
+    visited: list[str] = []
+    callback: dict[str, str] = {}
+
+    async def open_browser(authorize_url: str) -> None:
+        async with httpx.AsyncClient() as browser:
+            response = await browser.get(authorize_url)
+            assert response.status_code == 302
+            consent_url = urljoin(authorize_url, response.headers["location"])
+            page = await browser.get(consent_url)
+            action = re.search(r'<form method="POST" action="([^"]+)"', page.text)
+            pending = re.search(r'name="pending" value="([^"]+)"', page.text)
+            assert action and pending, page.text
+            submit_url = urljoin(consent_url, action.group(1))
+            visited.extend([consent_url, submit_url])
+            response = await browser.post(
+                submit_url, data={"pending": pending.group(1), "password": TEST_OAUTH_PASSWORD}
+            )
+            assert response.status_code == 302, response.text
+            query = parse_qs(urlparse(response.headers["location"]).query)
+            callback.update(code=query["code"][0], state=query["state"][0])
+
+    async def receive_callback() -> AuthorizationCodeResult:
+        return AuthorizationCodeResult(code=callback["code"], state=callback["state"])
+
+    with running_prefixed_server(settings, service) as base:
+        provider = OAuthClientProvider(
+            f"{base}/mcp",
+            OAuthClientMetadata(
+                client_name="subpath-e2e",
+                redirect_uris=[AnyUrl(REDIRECT_URI)],
+                grant_types=["authorization_code", "refresh_token"],
+                response_types=["code"],
+                token_endpoint_auth_method="none",
+            ),
+            _MemoryTokenStorage(),
+            open_browser,
+            receive_callback,
+        )
+
+        async def call_tool() -> str:
+            async with Client(f"{base}/mcp", auth=provider) as client:
+                result = await client.call_tool("list_task_lists", {})
+                return result.content[0].text
+
+        assert json.loads(asyncio.run(call_tool())) == service.list_task_lists.return_value
+
+    consent_page, consent_submit = visited
+    assert urlparse(consent_page).path == f"{PREFIX}/consent"
+    assert urlparse(consent_submit).path == f"{PREFIX}/consent"
+
+
+def test_root_deployment_adds_no_path_aware_discovery_routes(settings):
+    app = build_server(settings, service=MagicMock(spec=CalDavService)).http_app()
+    paths = [route.path for route in app.routes if isinstance(route, Route)]
+    well_known = sorted(path for path in paths if path.startswith("/.well-known/"))
+    assert well_known == [
+        "/.well-known/oauth-authorization-server",
+        "/.well-known/oauth-protected-resource/mcp",
+    ]

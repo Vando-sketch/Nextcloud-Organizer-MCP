@@ -15,9 +15,11 @@ from typing import Any
 from urllib.parse import urlparse
 
 import anyio.to_thread
+import fastmcp
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from starlette.routing import Route
 
 from . import event_mapping, mapping, notes_mapping
 from .caldav_client import CalDavService
@@ -259,6 +261,26 @@ def _build_auth(settings: Settings) -> PersonalAuthProvider | None:
     )
 
 
+def _add_prefixed_discovery_routes(mcp: FastMCP, auth: PersonalAuthProvider) -> None:
+    """Serve path-aware OAuth discovery when PUBLIC_BASE_URL carries a path prefix.
+
+    With PUBLIC_BASE_URL=https://cloud.example.com/organizer the issuer has a
+    path, so clients look up its metadata at the domain root under
+    /.well-known/oauth-authorization-server/organizer (RFC 8414), outside the
+    prefix a proxy strips. `http_app()` only mounts the root-deployment route;
+    the path-aware ones come from `get_well_known_routes()`, which FastMCP leaves
+    to the operator to mount. Serving them here lets the proxy forward those
+    exact paths unchanged. A root deployment gets no extra routes.
+    """
+    if not urlparse(str(auth.issuer_url)).path.rstrip("/"):
+        return
+    mcp_path = fastmcp.settings.streamable_http_path
+    served = {route.path for route in auth.get_routes(mcp_path) if isinstance(route, Route)}
+    for route in auth.get_well_known_routes(mcp_path):
+        if isinstance(route, Route) and route.path not in served:
+            mcp.custom_route(route.path, methods=sorted(route.methods or ()))(route.endpoint)
+
+
 def build_server(
     settings: Settings,
     service: CalDavService | None = None,
@@ -272,7 +294,10 @@ def build_server(
     CalDavService/NotesService built from `settings`.
     """
     mapping.set_default_timezone(settings.default_timezone)
-    mcp = FastMCP(name="nextcloud-organizer-mcp", auth=_build_auth(settings))
+    auth = _build_auth(settings)
+    mcp = FastMCP(name="nextcloud-organizer-mcp", auth=auth)
+    if auth is not None:
+        _add_prefixed_discovery_routes(mcp, auth)
 
     def tool(*, annotations: ToolAnnotations) -> Callable[[Callable[..., Any]], Any]:
         """`mcp.tool` with the full docstring as the tool description.

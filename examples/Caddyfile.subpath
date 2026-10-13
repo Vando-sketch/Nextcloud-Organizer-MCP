@@ -1,0 +1,45 @@
+# Serve MCP under a path prefix on the existing Nextcloud hostname:
+# https://cloud.example.com/organizer, connector URL
+# https://cloud.example.com/organizer/mcp. Prefer a dedicated subdomain
+# (examples/Caddyfile) when you can add one; see docs/deployment.md.
+#
+# MCP runs on the same host network with:
+# PUBLIC_BASE_URL=https://cloud.example.com/organizer
+# MCP_HOST=127.0.0.1 MCP_PORT=8000 FORWARDED_ALLOW_IPS=127.0.0.1
+# Set MCP_OAUTH_PASSWORD and a persistent MCP_OAUTH_STATE_DIR as documented.
+#
+# Merge this logging configuration into your existing global options block.
+# It filters the default runtime logger, including upstream failure logs.
+# Apply equivalent filters to separately configured access-log outputs.
+{
+	log default {
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers>Referer delete
+			}
+		}
+	}
+}
+
+cloud.example.com {
+	# MCP, OAuth endpoints and the consent page, with /organizer stripped.
+	handle_path /organizer/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# OAuth discovery for the /organizer issuer lives at the domain root
+	# (RFC 8414 and RFC 9728 insert the path after /.well-known/). Forward
+	# these exact paths unchanged.
+	@organizer_discovery path /.well-known/oauth-authorization-server/organizer /.well-known/openid-configuration/organizer /.well-known/oauth-protected-resource/organizer/*
+	handle @organizer_discovery {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	# Everything else is Nextcloud: move your existing Nextcloud directives
+	# into this block in place of the placeholder upstream.
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}

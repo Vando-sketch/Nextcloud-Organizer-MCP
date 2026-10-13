@@ -119,13 +119,14 @@ client runs:
 
 - **Claude.ai (web), Claude mobile and Cowork** are cloud-hosted. Anthropic's servers
   call your server, so it needs a **public HTTPS URL** and `MCP_OAUTH_PASSWORD`. Use one
-  of the first four rows.
+  of the first five rows.
 - **Claude Desktop and Claude Code on the same machine** can reach `localhost`. They need
   no public URL and no password. Use one of the last two rows.
 
 | Option | Prerequisites | Exposure and authentication | Status |
 |---|---|---|---|
 | [Existing reverse proxy or shared Nextcloud host](docs/deployment.md#reuse-another-existing-nextcloud-proxy) | A proxy you already run with TLS on the same host, a new subdomain | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Not tested (nginx, Traefik) |
+| [Path on the Nextcloud hostname](docs/deployment.md#serve-under-a-path-on-the-nextcloud-hostname) | A proxy for the Nextcloud hostname that can strip a path prefix | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Partially tested (local Caddy and real Nextcloud; no public run, no Claude.ai) |
 | [New public server with Caddy](docs/deployment.md#caddy-on-the-same-host) | A host with a public IP, ports 80 and 443 open, a DNS name | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Partially tested (local Caddy only, no public run) |
 | [Cloudflare Tunnel](docs/deployment.md#4c-alternative-cloudflare-tunnel) | A domain on Cloudflare; no open ports, works behind CGNAT | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Partially tested (quick tunnel and scripted client; standalone `GET /mcp` stream failed on the quick tunnel) |
 | [Tailscale Funnel](docs/deployment.md#4b-expose-via-tailscale-funnel) | A Tailscale account with Funnel enabled | Public HTTPS. `MCP_OAUTH_PASSWORD` required | Supported, tested with claude.ai |
@@ -159,7 +160,7 @@ Claude ── HTTPS + OAuth 2.1 ──► your server (this project) ── CalD
 
 ## Documentation
 
-- [Deployment guide](docs/deployment.md) &mdash; deployment chooser, systemd, Caddy/existing Nextcloud proxy, Tailscale Funnel or Cloudflare Tunnel, local-only use, and Claude connector setup
+- [Deployment guide](docs/deployment.md) &mdash; deployment chooser, systemd, Caddy/existing Nextcloud proxy, Tailscale Funnel or Cloudflare Tunnel, local-only use, Claude connector setup, and the `nextcloud-organizer-mcp-doctor` deployment check
 - [Running in Docker](docs/docker.md) &mdash; container image, compose file, persistence, TLS
 - [Authentication](docs/authentication.md) &mdash; OAuth model, consent page, local security patches
 - [Tool reference](docs/tools.md) &mdash; all tools with parameters, examples and error messages
