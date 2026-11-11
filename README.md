@@ -62,6 +62,8 @@ What Claude wrote shows up in the normal Nextcloud apps, immediately:
 - **Calendars and events** (VEVENT): recurring events, attendees and RSVP, free/busy, sharing, ICS import/export, birthdays, batch operations, trash bin.
 - **Timeboxing**: turn a task into a calendar block and keep both linked.
 - **Notes**: create, search, append, replace a passage or a single Markdown section.
+- **Files** (opt-in, read-only): list, read text files and search by name, only inside
+  the folders you allow with `NEXTCLOUD_FILES_ALLOWED_PATHS`.
 - **Combined day agenda**: events and due tasks together.
 - **Safe by default**: OAuth 2.1 with a password consent page, `https://` enforced for Nextcloud, clean error messages instead of stack traces.
 - **51 tools** in total, documented in the [tool reference](docs/tools.md).

@@ -67,6 +67,10 @@ class Settings:
     # "http" serves the OAuth-protected HTTP endpoint; "stdio" talks to a local
     # client that started this process, with no auth, port, or OAuth state.
     transport: Literal["http", "stdio"] = "http"
+    # Nextcloud Files folders the read-only file tools may see, as normalized
+    # absolute paths inside the user's files ("/Schule"). Empty disables the
+    # file tools entirely - they are not even registered.
+    files_allowed_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.transport not in _TRANSPORTS:
@@ -223,6 +227,10 @@ class Settings:
 
         default_timezone = default_timezone_from_env()
 
+        files_allowed_paths = parse_files_allowed_paths(
+            os.environ.get("NEXTCLOUD_FILES_ALLOWED_PATHS", "")
+        )
+
         notes_base_url = require("NEXTCLOUD_BASE_URL")
         # A base URL is an origin plus an optional install subdirectory - never
         # a query or fragment. Both are plausible leftovers from copying the URL
@@ -261,7 +269,35 @@ class Settings:
             caldav_timeout_seconds=caldav_timeout_seconds,
             default_timezone=default_timezone,
             transport=transport,  # type: ignore[arg-type]  # validated in __post_init__
+            files_allowed_paths=files_allowed_paths,
         )
+
+
+def parse_files_allowed_paths(raw: str) -> tuple[str, ...]:
+    """Parse NEXTCLOUD_FILES_ALLOWED_PATHS into normalized folder paths.
+
+    A comma-separated list of folders inside the Nextcloud user's files, e.g.
+    "/Schule, /Ausbildung/Berichte". Each entry gets a leading slash and loses
+    any trailing one. A ".." segment is rejected outright rather than
+    normalized away: an allow-list entry that climbs out of where it appears
+    to point is a configuration mistake worth stopping the server for.
+    Duplicates are dropped, order is kept. "/" is accepted and means the
+    whole account.
+    """
+    paths: list[str] = []
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        segments = [seg for seg in entry.replace("\\", "/").split("/") if seg and seg != "."]
+        if ".." in segments:
+            raise ConfigError(
+                f"NEXTCLOUD_FILES_ALLOWED_PATHS entries must not contain '..': {entry!r}"
+            )
+        path = "/" + "/".join(segments)
+        if path not in paths:
+            paths.append(path)
+    return tuple(paths)
 
 
 def default_timezone_from_env() -> str:

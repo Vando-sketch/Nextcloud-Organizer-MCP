@@ -1800,6 +1800,38 @@ While automated integration tests verify API round-trips, client rendering and s
 
 ---
 
+## Files
+
+Read-only access to Nextcloud Files over WebDAV. **Opt-in:** these tools are only
+registered when `NEXTCLOUD_FILES_ALLOWED_PATHS` lists at least one folder, e.g.
+`/Schule,/Ausbildung/Berichte`. Every path is normalized first (`..` resolved,
+duplicate slashes removed) and must be one of those folders or lie below one;
+anything else fails with "outside the allowed folders" before a request is sent.
+There are no write, move or delete tools for files.
+
+### `list_files(path=None)`
+
+Without `path`, returns the allowed folders. With a folder path, its direct
+children: `{"path", "entries": [{"path", "name", "type": "folder"|"file", "size",
+"content_type", "modified"}]}`, folders first.
+
+### `read_file(path, max_bytes=None)`
+
+Returns `{"path", "content_type", "content", "truncated"}` for UTF-8 text files
+(Markdown, plain text, CSV, source code). Reads at most `max_bytes` (default
+200 000, capped at 1 000 000). Binary files (images, PDFs, Office files) and
+folders are refused.
+
+### `search_files(name, path=None, limit=50)`
+
+Finds files and folders whose **name** contains `name`, using Nextcloud's WebDAV
+`SEARCH` (`basicsearch` with `like` on the display name), across every allowed
+folder or below `path`. It does not search file contents. Whether matching is
+case-sensitive depends on the Nextcloud database backend. `limit` is capped at
+200.
+
+---
+
 ## ICS import / export
 
 ### `export_calendar(calendar_name)`

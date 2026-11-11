@@ -9,6 +9,11 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- Read-only Nextcloud Files tools `list_files`, `read_file` (UTF-8 text) and
+  `search_files` (by name, WebDAV `SEARCH`). Opt-in: they are only registered when
+  `NEXTCLOUD_FILES_ALLOWED_PATHS` lists the folders they may see; every path is
+  checked against that allow-list before any request. See
+  [docs/tools.md](docs/tools.md#files).
 - Native stdio transport for clients on the same machine (Claude Desktop, Claude
   Code, MCP Inspector): set `MCP_TRANSPORT=stdio` and the client starts the server as
   a child process. It needs no `PUBLIC_BASE_URL`, OAuth setup, port or `mcp-remote`,

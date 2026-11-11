@@ -624,3 +624,33 @@ def test_stdio_still_rejects_cleartext_nextcloud_url():
 def test_http_with_empty_public_base_url_is_rejected():
     with pytest.raises(ConfigError, match="PUBLIC_BASE_URL"):
         _settings(transport="http", public_base_url="")
+
+
+# --- NEXTCLOUD_FILES_ALLOWED_PATHS ---
+
+
+def test_files_allowed_paths_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.delenv("NEXTCLOUD_FILES_ALLOWED_PATHS", raising=False)
+    assert Settings.from_env().files_allowed_paths == ()
+
+
+def test_files_allowed_paths_parsed_and_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv(
+        "NEXTCLOUD_FILES_ALLOWED_PATHS", " Schule/ , /Ausbildung//Berichte,,/Schule,./Uni/."
+    )
+    assert Settings.from_env().files_allowed_paths == ("/Schule", "/Ausbildung/Berichte", "/Uni")
+
+
+def test_files_allowed_paths_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("NEXTCLOUD_FILES_ALLOWED_PATHS", "/")
+    assert Settings.from_env().files_allowed_paths == ("/",)
+
+
+def test_files_allowed_paths_rejects_parent_segments(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_env(monkeypatch)
+    monkeypatch.setenv("NEXTCLOUD_FILES_ALLOWED_PATHS", "/Schule/../Privat")
+    with pytest.raises(ConfigError, match=r"\.\."):
+        Settings.from_env()

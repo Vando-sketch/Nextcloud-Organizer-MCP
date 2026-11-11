@@ -96,3 +96,15 @@ class NoteNotFoundError(TaskMcpError):
 class InvalidNoteDataError(TaskMcpError):
     """Raised when note field values are rejected by the Notes API, or when
     a note tool call is missing data it needs (e.g. no fields to update)."""
+
+
+class CloudFileNotFoundError(TaskMcpError):
+    """Raised when the requested Nextcloud file or folder does not exist."""
+
+
+class FileAccessDeniedError(TaskMcpError):
+    """Raised when a path lies outside NEXTCLOUD_FILES_ALLOWED_PATHS."""
+
+
+class UnsupportedFileError(TaskMcpError):
+    """Raised when read_file is asked for a folder or a file that is not text."""
