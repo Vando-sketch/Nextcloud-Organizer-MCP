@@ -74,6 +74,16 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Funnel, with the tested and untested parts listed explicitly. A named tunnel
   with a stable hostname is still unverified and feedback is welcome.
 
+## [0.2.2] - 2026-11-11
+
+### Security
+
+- Locked dependencies updated for the Docker image and `uv sync --locked`
+  installs: authlib 1.9.5, certifi 2026.10.23, opentelemetry-api 1.45.2, and
+  FastMCP 4.1.8 (with MCP SDK 2.3.0). No code, tool or configuration changes.
+  Installs via `pip`/`uvx` resolve dependencies themselves and are unaffected by
+  the lockfile; upgrading those packages there picks up the same fixes.
+
 ## [0.2.1] - 2026-09-29
 
 ### Added
@@ -787,7 +797,8 @@ High-level summary of the work packages from the initial code review:
   read-only `RRULE` surfacing; CalDAV rate-limit backoff; scheduled
   integration-test workflow.
 
-[Unreleased]: https://github.com/Vando-sketch/nextcloud-organizer-mcp/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Vando-sketch/nextcloud-organizer-mcp/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/Vando-sketch/nextcloud-organizer-mcp/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/Vando-sketch/nextcloud-organizer-mcp/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Vando-sketch/nextcloud-organizer-mcp/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Vando-sketch/nextcloud-organizer-mcp/compare/v0.1.0...v0.1.1
