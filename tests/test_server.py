@@ -21,11 +21,13 @@ from nextcloud_organizer_mcp.config import Settings
 from nextcloud_organizer_mcp.errors import (
     CalendarAlreadyExistsError,
     CalendarNotFoundError,
+    FileAccessDeniedError,
     InvalidEventDataError,
     NoteNotFoundError,
     TaskListAlreadyExistsError,
     TaskListNotFoundError,
 )
+from nextcloud_organizer_mcp.files_client import FilesService
 from nextcloud_organizer_mcp.notes_client import NotesService
 from nextcloud_organizer_mcp.personal_auth import PersonalAuthProvider
 from nextcloud_organizer_mcp.server import build_server, main
@@ -2222,3 +2224,65 @@ def test_tool_descriptions_are_the_full_docstring(tools):
     ]
     assert not truncated, truncated
     assert "Returns:" in (tools["list_events"].description or "")
+
+
+# --- Nextcloud Files tools (opt-in via NEXTCLOUD_FILES_ALLOWED_PATHS) ---
+
+_FILE_TOOLS = {"list_files", "read_file", "search_files"}
+
+
+def test_file_tools_absent_without_allowed_paths(tools):
+    assert not _FILE_TOOLS & set(tools)
+
+
+@pytest.fixture
+def file_tools(settings, fake_service, fake_notes_service):
+    fake_files = MagicMock(spec=FilesService)
+    mcp = build_server(
+        replace(settings, files_allowed_paths=("/Schule",)),
+        service=fake_service,
+        notes_service=fake_notes_service,
+        files_service=fake_files,
+    )
+    registered = {tool.name: tool for tool in asyncio.run(mcp.list_tools())}
+    return registered, fake_files
+
+
+def test_file_tools_registered_read_only_with_allowed_paths(file_tools):
+    registered, _ = file_tools
+    assert _FILE_TOOLS <= set(registered)
+    for name in _FILE_TOOLS:
+        assert registered[name].annotations.read_only_hint is True
+
+
+def test_file_tools_delegate_to_files_service(file_tools):
+    registered, fake_files = file_tools
+    fake_files.list_files.return_value = {"path": "/Schule", "entries": []}
+    fake_files.read_file.return_value = {"path": "/Schule/a.md", "content": "x"}
+    fake_files.search_files.return_value = [{"path": "/Schule/a.md"}]
+
+    assert _run(registered["list_files"].fn("/Schule"))["path"] == "/Schule"
+    assert _run(registered["read_file"].fn("/Schule/a.md", 10))["content"] == "x"
+    assert _run(registered["search_files"].fn("a", None, 5)) == [{"path": "/Schule/a.md"}]
+    fake_files.list_files.assert_called_once_with("/Schule")
+    fake_files.read_file.assert_called_once_with("/Schule/a.md", 10)
+    fake_files.search_files.assert_called_once_with("a", None, 5)
+
+
+def test_file_access_denied_becomes_tool_error(file_tools):
+    registered, fake_files = file_tools
+    fake_files.read_file.side_effect = FileAccessDeniedError("outside the allowed folders")
+    with pytest.raises(ToolError, match="outside the allowed folders"):
+        _run(registered["read_file"].fn("/Privat/x.md"))
+
+
+def test_build_server_creates_real_files_service_when_not_injected(
+    settings, fake_service, fake_notes_service
+):
+    mcp = build_server(
+        replace(settings, files_allowed_paths=("/Schule",)),
+        service=fake_service,
+        notes_service=fake_notes_service,
+    )
+    names = {tool.name for tool in asyncio.run(mcp.list_tools())}
+    assert _FILE_TOOLS <= names

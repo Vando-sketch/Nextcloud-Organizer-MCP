@@ -25,6 +25,7 @@ from . import event_mapping, mapping, notes_mapping
 from .caldav_client import CalDavService
 from .config import Settings, is_local_hostname
 from .errors import TaskMcpError
+from .files_client import FilesService
 from .notes_client import NotesService
 from .personal_auth import PersonalAuthProvider
 
@@ -285,13 +286,16 @@ def build_server(
     settings: Settings,
     service: CalDavService | None = None,
     notes_service: NotesService | None = None,
+    files_service: FilesService | None = None,
 ) -> FastMCP:
     """Construct the FastMCP server with all tools registered.
 
     The HTTP transport gets OAuth 2.1 auth; stdio gets none.
 
-    `service`/`notes_service` can be injected for testing; default to a real
-    CalDavService/NotesService built from `settings`.
+    `service`/`notes_service`/`files_service` can be injected for testing;
+    default to a real CalDavService/NotesService/FilesService built from
+    `settings`. The file tools are only registered when
+    `settings.files_allowed_paths` is non-empty.
     """
     mapping.set_default_timezone(settings.default_timezone)
     auth = _build_auth(settings)
@@ -2228,7 +2232,82 @@ def build_server(
         await _call_notes(notes_svc.delete_note(note_id))
         return {"id": note_id}
 
+    if settings.files_allowed_paths:
+        _register_file_tools(
+            tool,
+            files_service
+            or FilesService(
+                base_url=settings.notes_base_url,
+                username=settings.caldav_username,
+                password=settings.caldav_password,
+                allowed_paths=settings.files_allowed_paths,
+                timeout=settings.caldav_timeout_seconds,
+            ),
+        )
+
     return mcp
+
+
+def _register_file_tools(
+    tool: Callable[..., Callable[[Callable[..., Any]], Any]], files_svc: FilesService
+) -> None:
+    """Register the read-only Nextcloud Files tools (opt-in via the allow-list)."""
+
+    @tool(annotations=_READ_ONLY)
+    async def list_files(path: str | None = None) -> dict[str, Any]:
+        """List a folder in Nextcloud Files (read-only, allowed folders only).
+
+        Only folders configured in NEXTCLOUD_FILES_ALLOWED_PATHS (and
+        everything below them) can be seen. Call without a path first to get
+        the allowed folders.
+
+        Args:
+            path: Folder path inside the user's files, e.g. "/Schule/LF04".
+                Omit to list the allowed top-level folders.
+
+        Returns:
+            {"path": the listed folder (None for the allowed-folder overview),
+            "entries": [{"path", "name", "type": "folder"|"file", "size":
+            bytes or None, "content_type": MIME type for files, "modified":
+            HTTP date string}]}, folders first, then by name.
+        """
+        return await _call_notes(files_svc.list_files(path))
+
+    @tool(annotations=_READ_ONLY)
+    async def read_file(path: str, max_bytes: int | None = None) -> dict[str, Any]:
+        """Read a text file from Nextcloud Files (UTF-8 only, e.g. .md/.txt/.csv).
+
+        Binary files (images, PDFs, Office documents) are refused, not
+        converted.
+
+        Args:
+            path: File path inside the user's files, e.g. "/Schule/LF04/RAID.md".
+            max_bytes: Read at most this many bytes (default 200000, capped at
+                1000000). Longer files come back cut, with truncated=True.
+
+        Returns:
+            {"path", "content_type", "content": the text, "truncated": bool}.
+        """
+        return await _call_notes(files_svc.read_file(path, max_bytes))
+
+    @tool(annotations=_READ_ONLY)
+    async def search_files(name: str, path: str | None = None, limit: int = 50) -> list[Any]:
+        """Find files and folders by name in Nextcloud Files (not by content).
+
+        Uses Nextcloud's WebDAV search over the allowed folders, matching
+        `name` as a substring of the file name. There is no full-text search
+        of file contents.
+
+        Args:
+            name: Part of the file or folder name to look for, e.g. "RAID".
+            path: Optional folder to search below; defaults to every allowed
+                folder.
+            limit: Maximum results (default 50, capped at 200).
+
+        Returns:
+            Matching entries, same shape as one entry of list_files.
+        """
+        return await _call_notes(files_svc.search_files(name, path, limit))
 
 
 def main() -> None:

@@ -103,6 +103,10 @@ NEXTCLOUD_APP_PASSWORD=<app password from Settings -> Security>
 # (both URLs must point at the same Nextcloud instance).
 # NEXTCLOUD_CALDAV_URL=https://cloud.example.com/remote.php/dav/
 
+# Optional. Read-only Nextcloud Files access, limited to these folders (comma-
+# separated, subfolders included). Unset: no file tools. See docs/tools.md#files.
+# NEXTCLOUD_FILES_ALLOWED_PATHS=/Schule,/Ausbildung/Berichte
+
 # Must match the public HTTPS origin exactly (scheme + host, no /mcp), set up in step 4a,
 # 4b or 4c. For Funnel use https://<hostname>.<tailnet>.ts.net instead. A subpath
 # deployment adds its prefix: https://cloud.example.com/organizer.
