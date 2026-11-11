@@ -78,11 +78,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
-- Locked dependencies updated for the Docker image and `uv sync --locked`
-  installs: authlib 1.9.5, certifi 2026.10.23, opentelemetry-api 1.45.2, and
-  FastMCP 4.1.8 (with MCP SDK 2.3.0). No code, tool or configuration changes.
-  Installs via `pip`/`uvx` resolve dependencies themselves and are unaffected by
-  the lockfile; upgrading those packages there picks up the same fixes.
+- Locked dependencies updated for `uv sync --locked` installs from a checkout:
+  authlib 1.9.5, certifi 2026.10.23, opentelemetry-api 1.45.2, and FastMCP 4.1.8
+  (with MCP SDK 2.3.0). No code, tool or configuration changes. Installs via
+  `pip`/`uvx` resolve dependencies themselves and are unaffected by the
+  lockfile; upgrading those packages there picks up the same fixes. No Docker
+  image was published for 0.2.2 (the image build only exists on `dev`).
 
 ## [0.2.1] - 2026-09-29
 
